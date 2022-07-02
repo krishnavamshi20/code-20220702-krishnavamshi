@@ -1,0 +1,147 @@
+---
+
+Resources:
+
+# Creating SNS Topic with SQS subscription
+  MySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+        Subscription:
+        - Endpoint: !GetAtt MyQueue.Arn
+          Protocol: sqs
+        TopicName: IamSNSTopic
+  
+  MyQueue: 
+    Type: AWS::SQS::Queue
+
+# Creating s3 Bucket with versioning and LifeCycle Configuration
+  Mys3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: 'sns-messsage-krishnavamshi'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+        - Id: OneYearRule
+          Status: Enabled
+          Transitions:  
+            - TransitionInDays: 90             
+              StorageClass: STANDARD_IA
+            - TransitionInDays: 180             
+              StorageClass: GLACIER
+            - TransitionInDays: 365             
+              StorageClass: DEEP_ARCHIVE
+                  
+# Creating lambda function 
+
+  TheLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt  LambdaExecutionRole.Arn
+      Code: 
+        ZipFile: |
+          import boto3
+          from datetime import datetime
+
+          s3 = boto3.client('s3')
+          
+          def lambda_handler(event, context):
+                  bucket = 'sns-messsage-krishnavamshi'
+              
+                  for record in event['Records']:
+                      payload = record['body']
+                      now = datetime.now()
+                      filename = "sns-messsage-" + now.strftime("%d-%m-%y-%H:%M:%S") + ".json"
+                      s3.put_object(Bucket = bucket , Key = filename , Body= payload)
+                      print("put complete")
+
+# Adding trigger to Lambda function
+  MyEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt MyQueue.Arn
+        
+      FunctionName: !GetAtt TheLambdaFunction.Arn
+
+# Creating Access policies
+  sqsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties: 
+      PolicyDocument:
+        Statement:
+        - Effect : Allow
+          Principal:
+            Service: sns.amazonaws.com
+          Action:
+          - sqs:SendMessage
+          Resource: "*"
+          Condition:
+            ArnEquals:
+              aws:SourceArn:
+                Ref: MySNSTopic
+      Queues: 
+      - !Ref MyQueue
+
+  CloudWatchLogs:
+    Type: AWS::IAM::Policy
+    Properties:
+        PolicyName: CloudWatchLogs
+        PolicyDocument:
+          Statement: 
+          - Effect: Allow
+            Action:
+            - logs:CreateLogStream
+            - logs:CreateLogGroup
+            - logs:PutLogEvents
+            Resource: "*"
+        Roles: 
+        - !Ref LambdaExecutionRole
+  sqsPermissions:
+    Type: AWS::IAM::Policy
+    Properties:
+        PolicyName: sqsPermissions
+        PolicyDocument:
+          Statement: 
+          - Effect: Allow
+            Action:
+            - sqs:DeleteMessage
+            - sqs:GetQueueUrl
+            - sqs:PurgeQueue
+            - sqs:ReceiveMessage
+            - sqs:DeleteQueue
+            - sqs:GetQueueAttributes
+            Resource: "*"
+        Roles:
+        - !Ref LambdaExecutionRole
+  s3PutObject:
+    Type: AWS::IAM::Policy
+    Properties:
+        PolicyName: s3PutObject
+        PolicyDocument:
+          Statement: 
+          - Effect: Allow
+            Action:
+            - s3:PutObject
+            Resource: "*"
+        Roles:
+        - !Ref LambdaExecutionRole
+
+# Creating lambda Execution Role 
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+       AssumeRolePolicyDocument:
+          Statement:
+          - Effect: "Allow"
+            Principal: 
+              Service: 
+                - "lambda.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+       RoleName: LambdaExecutionRole
+
+
+  
